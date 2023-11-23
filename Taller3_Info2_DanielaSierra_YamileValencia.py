@@ -4,7 +4,6 @@ Created on Wed Nov 22 16:33:36 2023
 
 @author: Yami
 """
-
 import os
 import sys
 import unicodedata
@@ -104,46 +103,104 @@ class MedVisDicomViewer(QWidget):
         self.model = model
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
-        self.cmap_combobox = None  # Nuevo: ComboBox para elegir el mapa de colores
+        self.cmap_combobox = None
+        self.zoom_factor = 1.0
+        self.drag_start = None
+
+        self.canvas.mpl_connect("button_press_event", self.on_mouse_press)
+        self.canvas.mpl_connect("motion_notify_event", self.on_mouse_move)
+        self.canvas.mpl_connect("button_release_event", self.on_mouse_release)
+
+        # Definir botones de Zoom antes de llamar a initUI
+        self.zoom_in_button = QPushButton("+", self)
+        self.zoom_in_button.clicked.connect(self.zoom_in)
+        self.zoom_out_button = QPushButton("-", self)
+        self.zoom_out_button.clicked.connect(self.zoom_out)
+
         self.initUI()
 
     def initUI(self):
         layout = QVBoxLayout()
 
-        # Agregar ComboBox para elegir mapa de colores
+        # Agregar ComboBox y botones de zoom
         self.cmap_combobox = QComboBox(self)
         self.cmap_combobox.addItems(['viridis', 'inferno', 'plasma', 'magma', 'cividis', 'twilight'])
         self.cmap_combobox.currentIndexChanged.connect(self.update_image)
 
-        # El slider determina la imagen actual que se muestra
         self.slider = QSlider()
         self.slider.setOrientation(Qt.Horizontal)
         self.slider.valueChanged[int].connect(self.slider_changed)
 
-        # Añadir el canvas de Matplotlib, el slider y el ComboBox al layout
+        # Añadir widgets al layout
         layout.addWidget(self.canvas)
         layout.addWidget(self.slider)
         layout.addWidget(self.cmap_combobox)
+        layout.addWidget(self.zoom_in_button)
+        layout.addWidget(self.zoom_out_button)
 
         self.setLayout(layout)
 
     def slider_changed(self, value):
-        # Cambiar la imagen mostrada al valor actual del slider
         self.model.current_image_index = value
         self.update_image()
 
+    def zoom_in(self):
+        if self.zoom_factor > 0.1:  # Evitar un zoom demasiado pequeño
+            self.zoom_factor /= 1.2  # Reducir el zoom (acercar)
+            self.update_image()
+
+    def zoom_out(self):
+        self.zoom_factor *= 1.2  # Aumentar el zoom (alejar)
+        self.update_image()
+
     def update_image(self):
-        # Asegurarse de que hay una imagen para mostrar
         dicom_files_exist = bool(self.model.dicom_files)
         if dicom_files_exist:
             dicom_image = self.model.get_current_image()
-            # Limpiar la figura y mostrar la nueva imagen con el mapa de colores seleccionado
             self.figure.clf()
             ax = self.figure.add_subplot(111)
             cmap_name = self.cmap_combobox.currentText()
-            ax.imshow(dicom_image.pixel_array, cmap=cmap_name)
-            self.canvas.draw()
+            
+            # Calcular los límites de visualización
+            width, height = dicom_image.pixel_array.shape[1], dicom_image.pixel_array.shape[0]
+            xlim = width * self.zoom_factor / 2
+            ylim = height * self.zoom_factor / 2
+            center_x, center_y = width / 2, height / 2
 
+            # Aplicar el zoom
+            ax.imshow(dicom_image.pixel_array, cmap=cmap_name, aspect='auto')
+            ax.set_xlim([center_x - xlim, center_x + xlim])
+            ax.set_ylim([center_y + ylim, center_y - ylim])
+
+            self.canvas.draw()
+    
+    def on_mouse_press(self, event):
+        if event.button == 1:  # Botón izquierdo del ratón
+            self.drag_start = (event.xdata, event.ydata)
+
+    def on_mouse_move(self, event):
+        if event.button == 1 and self.drag_start:
+            dx = self.drag_start[0] - event.xdata
+            dy = self.drag_start[1] - event.ydata
+            self.drag_start = (event.xdata, event.ydata)
+            self.pan_image(dx, dy)
+
+    def on_mouse_release(self, event):
+        if event.button == 1:
+            self.drag_start = None
+
+    def pan_image(self, dx, dy):
+        if not bool(self.model.dicom_files):
+            return
+
+        ax = self.figure.axes[0]
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+
+        ax.set_xlim(xlim[0] + dx, xlim[1] + dx)
+        ax.set_ylim(ylim[0] + dy, ylim[1] + dy)
+
+        self.canvas.draw()
 
 class MedVisController(QMainWindow):
     def __init__(self):
